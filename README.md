@@ -3,11 +3,13 @@
 Intray keeps a list of every desktop notification, so you can turn
 on Do Not Disturb and triage the notifications later. It targets elementary OS.
 
-Each entry shows the app, the time, the summary and the body. Select **Open** to
-launch the app that sent it, or **Done** to remove the entry. **Clear all**
+Each entry shows the app, how long ago it arrived, the summary and the body.
+Hover over the time to see the date. Select an entry or its **Open** button to
+launch the app that sent it, or select **Done** to remove the entry. **Clear all**
 empties the inbox and shows an **Undo** button for a few seconds. The
 **Do Not Disturb** switch in the header bar turns the elementary OS setting on
-and off.
+and off. Intray skips transient notifications, which apps mark as not worth
+keeping, and remembers the size of its window.
 
 If an app sends no desktop entry, **Open** and the icon fall back to an installed
 app whose desktop id or name exactly matches the app name, ignoring case.

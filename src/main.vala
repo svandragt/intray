@@ -2,6 +2,24 @@ const string SCHEMA = "io.elementary.notifications";
 const string NOTIFY_SIGNATURE = "(susssasa{sv}i)";
 const string APP_ID = "com.github.svandragt.Intray";
 
+// The source line of an entry. The window refreshes its relative time.
+class Stamp : Object {
+    public Gtk.Label label = new Gtk.Label (null) { xalign = 0 };
+    string app;
+    DateTime time;
+
+    public Stamp (string app, DateTime time) {
+        this.app = app;
+        this.time = time;
+        label.tooltip_text = time.format ("%d %b %Y %H:%M");
+        update ();
+    }
+
+    public void update () {
+        label.label = "%s · %s".printf (app, Granite.DateTime.get_relative_datetime (time));
+    }
+}
+
 class Window : Gtk.ApplicationWindow {
     KeyFile store = new KeyFile ();
     string path = Path.build_filename (Environment.get_user_data_dir (), "intray", "inbox.ini");
@@ -27,6 +45,20 @@ class Window : Gtk.ApplicationWindow {
                 warning ("Cannot load %s: %s", settings_path, e.message);
             }
         }
+        try {
+            default_width = settings.get_integer ("window", "width");
+            default_height = settings.get_integer ("window", "height");
+            if (settings.get_boolean ("window", "maximized")) {
+                maximize ();
+            }
+        } catch (Error e) {  // not saved yet
+        }
+        // Quitting while the window is open skips close-request, so save then too.
+        close_request.connect (() => {
+            save_window ();
+            return false;
+        });
+        app.shutdown.connect (save_window);
         var dock = new SimpleAction.stateful ("show-count", null, new Variant.boolean (show_count));
         dock.change_state.connect ((action, state) => {
             show_count = state.get_boolean ();
@@ -46,7 +78,7 @@ class Window : Gtk.ApplicationWindow {
         menu.append ("Quit", "app.quit");
         header.pack_end (new Gtk.MenuButton () { icon_name = "open-menu-symbolic", menu_model = menu });
         header.pack_start (clear);
-        var toast = new Granite.Toast ("Inbox cleared");
+        var toast = new Granite.Toast ("Inbox cleared") { valign = Gtk.Align.END };  // the top would cover the newest entry
         toast.set_default_action ("Undo");
         clear.clicked.connect (() => {
             cleared += store.to_data ();
@@ -101,6 +133,24 @@ class Window : Gtk.ApplicationWindow {
         }
         reload_rows ();
         start_monitor ();
+        list.row_activated.connect ((row) => row.get_data<Gtk.Button> ("open").clicked ());
+        Timeout.add_seconds (60, () => {
+            for (var row = list.get_first_child (); row != null; row = row.get_next_sibling ()) {
+                row.get_data<Stamp> ("stamp").update ();
+            }
+            return Source.CONTINUE;
+        });
+    }
+
+    void save_window () {
+        if (visible) {  // a window that was never shown reports a false size and state
+            int width, height;
+            get_default_size (out width, out height);
+            settings.set_integer ("window", "width", width);
+            settings.set_integer ("window", "height", height);
+            settings.set_boolean ("window", "maximized", maximized);
+            save_to (settings, settings_path);
+        }
     }
 
     void start_monitor () {
@@ -111,11 +161,11 @@ class Window : Gtk.ApplicationWindow {
             // (a monitor that sends is disconnected), and passes the rest so BecomeMonitor still works.
             monitor.add_filter ((conn, msg, incoming) => {
                 var type = msg.get_message_type ();
-                if (!incoming || (type != DBusMessageType.METHOD_CALL && type != DBusMessageType.METHOD_RETURN)) {
+                if (!incoming || (type != DBusMessageType.METHOD_CALL && type != DBusMessageType.METHOD_RETURN && type != DBusMessageType.ERROR)) {
                     return msg;
                 }
                 // The BecomeMonitor reply is addressed to this connection, captured replies to other clients.
-                if (type == DBusMessageType.METHOD_RETURN && msg.get_destination () == conn.get_unique_name ()) {
+                if (type != DBusMessageType.METHOD_CALL && msg.get_destination () == conn.get_unique_name ()) {
                     return msg;
                 }
                 var body = msg.get_body ();
@@ -133,13 +183,20 @@ class Window : Gtk.ApplicationWindow {
                         set_server_id (call, id);
                         return Source.REMOVE;
                     });
+                } else if (type == DBusMessageType.ERROR) {
+                    var call = "%s/%u".printf (msg.get_destination (), msg.get_reply_serial ());
+                    Idle.add (() => {
+                        reject (call);
+                        return Source.REMOVE;
+                    });
                 }
                 return null;
             });
             // The server's reply carries the id that a later Notify can pass as replaces_id.
             string[] rules = {
                 "type='method_call',interface='org.freedesktop.Notifications',member='Notify'",
-                "type='method_return',sender='org.freedesktop.Notifications'"
+                "type='method_return',sender='org.freedesktop.Notifications'",
+                "type='error',sender='org.freedesktop.Notifications'"
             };
             monitor.call_sync ("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus.Monitoring",
                 "BecomeMonitor", new Variant ("(^asu)", rules, 0), null, DBusCallFlags.NONE, -1);
@@ -148,11 +205,26 @@ class Window : Gtk.ApplicationWindow {
         }
     }
 
+    // Senders disagree on the type of the transient hint, so accept a boolean, a byte or an int.
+    bool is_transient (Variant hints) {
+        var value = hints.lookup_value ("transient", null);
+        switch (value?.get_type_string ()) {
+            case "b": return value.get_boolean ();
+            case "y": return value.get_byte () != 0;
+            case "i": return value.get_int32 () != 0;
+            default: return false;
+        }
+    }
+
     void add (Variant notify, string call) {
+        var hints = notify.get_child_value (6);
+        if (is_transient (hints)) {
+            return;
+        }
         var key = get_real_time ().to_string ();  // monotonic time restarts at boot and would reuse saved keys
         var app = notify.get_child_value (0).get_string ();
         var replaces = notify.get_child_value (1).get_uint32 ();
-        var hint = notify.get_child_value (6).lookup_value ("desktop-entry", VariantType.STRING);
+        var hint = hints.lookup_value ("desktop-entry", VariantType.STRING);
         // Server ids restart when the server does, so the newest entry of the same app wins.
         string? old = null;
         foreach (var group in store.get_groups ()) {
@@ -195,6 +267,19 @@ class Window : Gtk.ApplicationWindow {
         }
     }
 
+    // An error reply means the server never showed the notification, so the inbox drops it too.
+    void reject (string call) {
+        var key = pending[call];
+        if (key != null) {
+            pending.remove (call);
+            if (store.has_group (key)) {
+                remove_group (key);
+                save_to (store, path);
+                reload_rows ();
+            }
+        }
+    }
+
     string field (string key, string name) {
         try {
             return store.get_string (key, name);
@@ -214,7 +299,8 @@ class Window : Gtk.ApplicationWindow {
             warning ("Bad time in %s: %s", key, e.message);
         }
 
-        var source = new Gtk.Label ("%s · %s".printf (field (key, "app"), new DateTime.from_unix_local (time).format ("%d %b %H:%M"))) { xalign = 0 };
+        var stamp = new Stamp (field (key, "app"), new DateTime.from_unix_local (time));
+        var source = stamp.label;
         source.add_css_class (Granite.CssClass.DIM);
         source.add_css_class (Granite.CssClass.SMALL);
         // Granite's h3 and h4 classes are not bold, and in a list h4 adds a margin, so set the weight directly.
@@ -252,7 +338,9 @@ class Window : Gtk.ApplicationWindow {
         var collapse = new Gtk.Revealer () {
             child = fade, reveal_child = true, transition_type = Gtk.RevealerTransitionType.SLIDE_UP, transition_duration = 200
         };
-        var row = new Gtk.ListBoxRow () { child = collapse, activatable = false };
+        var row = new Gtk.ListBoxRow () { child = collapse, activatable = info != null };
+        row.set_data ("stamp", stamp);
+        row.set_data ("open", open);
         list.prepend (row);
 
         open.clicked.connect (() => {
@@ -337,6 +425,10 @@ void follow_color_scheme () {
     Gtk.Settings.get_default ().gtk_application_prefer_dark_theme = dark;
 }
 
+// valac passes string[] as char **, which C does not convert to the const char * const * that GTK takes.
+[CCode (cname = "gtk_application_set_accels_for_action")]
+extern void set_accels (Gtk.Application app, string action, [CCode (array_length = false, array_null_terminated = true, type = "const gchar * const *")] string[] accels);
+
 int main (string[] args) {
     var app = new Gtk.Application (APP_ID, ApplicationFlags.HANDLES_COMMAND_LINE);
     app.add_main_option ("background", 0, OptionFlags.NONE, OptionArg.NONE, "Start without showing the window", null);
@@ -347,8 +439,8 @@ int main (string[] args) {
         var quit = new SimpleAction ("quit", null);
         quit.activate.connect (app.quit);
         app.add_action (quit);
-        app.set_accels_for_action ("app.quit", { "<Control>q" });
-        app.set_accels_for_action ("window.close", { "<Control>w" });
+        set_accels (app, "app.quit", { "<Control>q" });
+        set_accels (app, "window.close", { "<Control>w" });
         new Window (app);  // captures notifications even while hidden
     });
     app.command_line.connect ((command_line) => {
