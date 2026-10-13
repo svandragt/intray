@@ -8,13 +8,14 @@ class Window : Gtk.ApplicationWindow {
     Gtk.ListBox list = new Gtk.ListBox () { selection_mode = Gtk.SelectionMode.NONE, show_separators = true };
     Gtk.Stack stack = new Gtk.Stack ();
     Gtk.Button clear = new Gtk.Button.with_label ("Clear all");
+    string cleared = "";  // inbox data removed by Clear all, kept for Undo until the toast is dismissed
     DBusConnection monitor;
     KeyFile settings = new KeyFile ();
     string settings_path = Path.build_filename (Environment.get_user_config_dir (), "intray", "settings.ini");
     bool show_count = true;
 
     public Window (Gtk.Application app) {
-        Object (application: app, default_width: 480, default_height: 640);
+        Object (application: app, default_width: 480, default_height: 640, hide_on_close: true);
 
         try {
             settings.load_from_file (settings_path, KeyFileFlags.NONE);
@@ -29,12 +30,7 @@ class Window : Gtk.ApplicationWindow {
             show_count = state.get_boolean ();
             action.set_state (state);
             settings.set_boolean ("dock", "show-count", show_count);
-            try {
-                DirUtils.create_with_parents (Path.get_dirname (settings_path), 0700);
-                settings.save_to_file (settings_path);
-            } catch (Error e) {
-                warning ("Cannot save %s: %s", settings_path, e.message);
-            }
+            save_to (settings, settings_path);
             refresh ();
         });
         add_action (dock);
@@ -45,16 +41,30 @@ class Window : Gtk.ApplicationWindow {
         header.add_css_class (Granite.STYLE_CLASS_FLAT);
         var menu = new Menu ();
         menu.append ("Show Count in Dock", "win.show-count");
+        menu.append ("Quit", "app.quit");
         header.pack_end (new Gtk.MenuButton () { icon_name = "open-menu-symbolic", menu_model = menu });
         header.pack_start (clear);
+        var toast = new Granite.Toast ("Inbox cleared");
+        toast.set_default_action ("Undo");
         clear.clicked.connect (() => {
-            foreach (var key in store.get_groups ()) {
-                remove_group (key);
-            }
-            save ();
-            list.remove_all ();
-            refresh ();
+            cleared += store.to_data ();
+            store = new KeyFile ();
+            save_to (store, path);
+            reload_rows ();
+            toast.send_notification ();
         });
+        // Prepending the cleared groups keeps the file oldest first and keeps notifications that arrived since.
+        toast.default_action.connect (() => {
+            try {
+                store.load_from_data (cleared + store.to_data (), -1, KeyFileFlags.NONE);
+                cleared = "";
+                save_to (store, path);
+                reload_rows ();
+            } catch (Error e) {
+                warning ("Cannot restore the inbox: %s", e.message);
+            }
+        });
+        toast.dismissed.connect (() => cleared = "");
 
         var schema = SettingsSchemaSource.get_default ()?.lookup (SCHEMA, true);
         if (schema != null && schema.has_key ("do-not-disturb")) {
@@ -74,7 +84,9 @@ class Window : Gtk.ApplicationWindow {
         stack.add_named (new Gtk.ScrolledWindow () { child = list }, "list");
         stack.add_named (new Granite.Placeholder ("Inbox zero") { icon = new ThemedIcon ("emblem-ok-symbolic") }, "empty");
         titlebar = header;
-        child = stack;
+        var overlay = new Gtk.Overlay () { child = stack };
+        overlay.add_overlay (toast);
+        child = overlay;
 
         try {
             store.load_from_file (path, KeyFileFlags.NONE);
@@ -85,10 +97,7 @@ class Window : Gtk.ApplicationWindow {
                 FileUtils.rename (path, path + ".corrupt");
             }
         }
-        foreach (var key in store.get_groups ()) {
-            add_row (key);  // file order is oldest first, and each row is prepended
-        }
-        refresh ();
+        reload_rows ();
         start_monitor ();
     }
 
@@ -129,7 +138,7 @@ class Window : Gtk.ApplicationWindow {
         store.set_string (key, "body", notify.get_child_value (4).get_string ());
         store.set_string (key, "desktop_entry", hint != null ? hint.get_string () : "");
         store.set_int64 (key, "time", get_real_time () / 1000000);
-        save ();
+        save_to (store, path);
         add_row (key);
         refresh ();
     }
@@ -202,7 +211,7 @@ class Window : Gtk.ApplicationWindow {
         });
         done.clicked.connect (() => {
             remove_group (key);
-            save ();
+            save_to (store, path);
             row.sensitive = false;
             fade.notify["child-revealed"].connect (() => collapse.reveal_child = false);
             collapse.notify["child-revealed"].connect (() => {
@@ -221,13 +230,12 @@ class Window : Gtk.ApplicationWindow {
         }
     }
 
-    void save () {
-        try {
-            DirUtils.create_with_parents (Path.get_dirname (path), 0700);
-            store.save_to_file (path);
-        } catch (Error e) {
-            warning ("Cannot save %s: %s", path, e.message);
+    void reload_rows () {
+        list.remove_all ();
+        foreach (var key in store.get_groups ()) {
+            add_row (key);  // file order is oldest first, and each row is prepended
         }
+        refresh ();
     }
 
     void refresh () {
@@ -249,18 +257,39 @@ class Window : Gtk.ApplicationWindow {
     }
 }
 
+void save_to (KeyFile file, string path) {
+    try {
+        DirUtils.create_with_parents (Path.get_dirname (path), 0700);
+        file.save_to_file (path);
+    } catch (Error e) {
+        warning ("Cannot save %s: %s", path, e.message);
+    }
+}
+
 void follow_color_scheme () {
     var dark = Granite.Settings.get_default ().prefers_color_scheme == Granite.Settings.ColorScheme.DARK;
     Gtk.Settings.get_default ().gtk_application_prefer_dark_theme = dark;
 }
 
 int main (string[] args) {
-    var app = new Gtk.Application (APP_ID, ApplicationFlags.DEFAULT_FLAGS);
+    var app = new Gtk.Application (APP_ID, ApplicationFlags.HANDLES_COMMAND_LINE);
+    app.add_main_option ("background", 0, OptionFlags.NONE, OptionArg.NONE, "Start without showing the window", null);
     app.startup.connect (() => {
         Granite.init ();
         follow_color_scheme ();
         Granite.Settings.get_default ().notify["prefers-color-scheme"].connect (follow_color_scheme);
+        var quit = new SimpleAction ("quit", null);
+        quit.activate.connect (app.quit);
+        app.add_action (quit);
+        app.set_accels_for_action ("app.quit", { "<Control>q" });
+        app.set_accels_for_action ("window.close", { "<Control>w" });
+        new Window (app);  // captures notifications even while hidden
     });
-    app.activate.connect (() => (app.active_window ?? new Window (app)).present ());
+    app.command_line.connect ((command_line) => {
+        if (!command_line.get_options_dict ().contains ("background")) {
+            app.active_window.present ();
+        }
+        return 0;
+    });
     return app.run (args);
 }

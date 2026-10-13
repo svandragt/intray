@@ -5,12 +5,21 @@ on Do Not Disturb and triage the notifications later. It targets elementary OS.
 
 Each entry shows the app, the time, the summary and the body. Select **Open** to
 launch the app that sent it, or **Done** to remove the entry. **Clear all**
-empties the inbox. The **Do Not Disturb** switch in the header bar turns the
-elementary OS setting on and off.
+empties the inbox and shows an **Undo** button for a few seconds. The
+**Do Not Disturb** switch in the header bar turns the elementary OS setting on
+and off.
 
 The inbox is saved to `~/.local/share/intray/inbox.ini`, so entries
 survive a restart. Notifications are only captured while the app is running.
-Start it when you log in to capture all of them.
+
+## Keep it running
+
+Closing the window does not quit Intray, so it keeps capturing notifications.
+Launch Intray again, or select its dock icon, to show the window. To quit, open
+the menu at the end of the header bar and select **Quit**, or press Ctrl+Q.
+
+To capture notifications from the moment you log in, run `intray --background`
+at login. It starts Intray without showing the window.
 
 ## Dock count
 
