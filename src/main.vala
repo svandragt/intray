@@ -45,6 +45,8 @@ class Window : Adw.ApplicationWindow {
         } catch (Error e) {
             if (!(e is FileError.NOENT)) {
                 warning ("Cannot load %s: %s", path, e.message);
+                // Move the unreadable file aside so the next save does not overwrite it.
+                FileUtils.rename (path, path + ".corrupt");
             }
         }
         foreach (var key in store.get_groups ()) {
@@ -83,7 +85,7 @@ class Window : Adw.ApplicationWindow {
     }
 
     void add (Variant notify) {
-        var key = get_monotonic_time ().to_string ();
+        var key = get_real_time ().to_string ();  // monotonic time restarts at boot and would reuse saved keys
         var hint = notify.get_child_value (6).lookup_value ("desktop-entry", VariantType.STRING);
         store.set_string (key, "app", notify.get_child_value (0).get_string ());
         store.set_string (key, "icon", notify.get_child_value (2).get_string ());
