@@ -17,7 +17,7 @@ class Window : Gtk.ApplicationWindow {
     HashTable<string, string> pending = new HashTable<string, string> (str_hash, str_equal);  // Notify call -> entry key
 
     public Window (Gtk.Application app) {
-        Object (application: app, default_width: 480, default_height: 640, hide_on_close: true);
+        Object (application: app, default_width: 480, default_height: 640, hide_on_close: true, title: "Intray");
 
         try {
             settings.load_from_file (settings_path, KeyFileFlags.NONE);
@@ -307,7 +307,6 @@ class Window : Gtk.ApplicationWindow {
 
     void refresh () {
         var count = store.get_groups ().length;
-        title = count > 0 ? "Intray (%d)".printf (count) : "Intray";
         stack.visible_child_name = count > 0 ? "list" : "empty";
         clear.sensitive = count > 0;
 
