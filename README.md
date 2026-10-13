@@ -9,6 +9,11 @@ empties the inbox and shows an **Undo** button for a few seconds. The
 **Do Not Disturb** switch in the header bar turns the elementary OS setting on
 and off.
 
+If an app sends no desktop entry, **Open** and the icon fall back to an installed
+app whose desktop id or name exactly matches the app name, ignoring case.
+When an app updates a notification, such as a download progress, Intray replaces
+the earlier entry with the new one.
+
 The inbox is saved to `~/.local/share/intray/inbox.ini`, so entries
 survive a restart. Notifications are only captured while the app is running.
 

@@ -13,6 +13,8 @@ class Window : Gtk.ApplicationWindow {
     KeyFile settings = new KeyFile ();
     string settings_path = Path.build_filename (Environment.get_user_config_dir (), "intray", "settings.ini");
     bool show_count = true;
+    List<AppInfo> apps;  // installed apps, reloaded with the rows so Open can match apps by name
+    HashTable<string, string> pending = new HashTable<string, string> (str_hash, str_equal);  // Notify call -> entry key
 
     public Window (Gtk.Application app) {
         Object (application: app, default_width: 480, default_height: 640, hide_on_close: true);
@@ -105,23 +107,40 @@ class Window : Gtk.ApplicationWindow {
         try {
             monitor = new DBusConnection.for_address_sync (BusType.SESSION.get_address_sync (),
                 DBusConnectionFlags.AUTHENTICATION_CLIENT | DBusConnectionFlags.MESSAGE_BUS_CONNECTION);
-            // The filter runs on a worker thread. It drops captured calls so GDBus never replies to them
+            // The filter runs on a worker thread. It drops captured calls and replies so GDBus never answers them
             // (a monitor that sends is disconnected), and passes the rest so BecomeMonitor still works.
             monitor.add_filter ((conn, msg, incoming) => {
-                if (!incoming || msg.get_message_type () != DBusMessageType.METHOD_CALL) {
+                var type = msg.get_message_type ();
+                if (!incoming || (type != DBusMessageType.METHOD_CALL && type != DBusMessageType.METHOD_RETURN)) {
+                    return msg;
+                }
+                // The BecomeMonitor reply is addressed to this connection, captured replies to other clients.
+                if (type == DBusMessageType.METHOD_RETURN && msg.get_destination () == conn.get_unique_name ()) {
                     return msg;
                 }
                 var body = msg.get_body ();
                 // Any client can send a malformed Notify, so check the signature before reading it.
-                if (body != null && body.get_type_string () == NOTIFY_SIGNATURE) {
+                if (type == DBusMessageType.METHOD_CALL && body != null && body.get_type_string () == NOTIFY_SIGNATURE) {
+                    var call = "%s/%u".printf (msg.get_sender (), msg.get_serial ());
                     Idle.add (() => {
-                        add (body);
+                        add (body, call);
+                        return Source.REMOVE;
+                    });
+                } else if (type == DBusMessageType.METHOD_RETURN && body != null && body.get_type_string () == "(u)") {
+                    var call = "%s/%u".printf (msg.get_destination (), msg.get_reply_serial ());
+                    var id = body.get_child_value (0).get_uint32 ();
+                    Idle.add (() => {
+                        set_server_id (call, id);
                         return Source.REMOVE;
                     });
                 }
                 return null;
             });
-            string[] rules = { "type='method_call',interface='org.freedesktop.Notifications',member='Notify'" };
+            // The server's reply carries the id that a later Notify can pass as replaces_id.
+            string[] rules = {
+                "type='method_call',interface='org.freedesktop.Notifications',member='Notify'",
+                "type='method_return',sender='org.freedesktop.Notifications'"
+            };
             monitor.call_sync ("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus.Monitoring",
                 "BecomeMonitor", new Variant ("(^asu)", rules, 0), null, DBusCallFlags.NONE, -1);
         } catch (Error e) {
@@ -129,18 +148,51 @@ class Window : Gtk.ApplicationWindow {
         }
     }
 
-    void add (Variant notify) {
+    void add (Variant notify, string call) {
         var key = get_real_time ().to_string ();  // monotonic time restarts at boot and would reuse saved keys
+        var app = notify.get_child_value (0).get_string ();
+        var replaces = notify.get_child_value (1).get_uint32 ();
         var hint = notify.get_child_value (6).lookup_value ("desktop-entry", VariantType.STRING);
-        store.set_string (key, "app", notify.get_child_value (0).get_string ());
+        // Server ids restart when the server does, so the newest entry of the same app wins.
+        string? old = null;
+        foreach (var group in store.get_groups ()) {
+            if (replaces != 0 && field (group, "app") == app && field (group, "server_id") == replaces.to_string ()) {
+                old = group;
+            }
+        }
+        store.set_string (key, "app", app);
         store.set_string (key, "icon", notify.get_child_value (2).get_string ());
         store.set_string (key, "summary", notify.get_child_value (3).get_string ());
         store.set_string (key, "body", notify.get_child_value (4).get_string ());
         store.set_string (key, "desktop_entry", hint != null ? hint.get_string () : "");
         store.set_int64 (key, "time", get_real_time () / 1000000);
+        if (old != null) {
+            remove_group (old);
+            store.set_int64 (key, "server_id", replaces);  // until the server's reply confirms it
+        }
+        if (pending.size () >= 100) {
+            pending.remove_all ();  // replies that never arrive must not pile up; a lost one only skips a merge
+        }
+        pending[call] = key;
         save_to (store, path);
-        add_row (key);
-        refresh ();
+        if (old != null) {
+            reload_rows ();
+        } else {
+            apps = AppInfo.get_all ();
+            add_row (key);
+            refresh ();
+        }
+    }
+
+    void set_server_id (string call, uint32 id) {
+        var key = pending[call];
+        if (key != null) {
+            pending.remove (call);
+            if (store.has_group (key)) {  // Done or a newer replacement may have removed it already
+                store.set_int64 (key, "server_id", id);
+                save_to (store, path);
+            }
+        }
     }
 
     string field (string key, string name) {
@@ -154,6 +206,7 @@ class Window : Gtk.ApplicationWindow {
     void add_row (string key) {
         var entry = field (key, "desktop_entry");
         var info = entry != "" ? new DesktopAppInfo (entry + ".desktop") : null;
+        info = info ?? find_app (field (key, "app"));
         int64 time = 0;
         try {
             time = store.get_int64 (key, "time");
@@ -222,6 +275,19 @@ class Window : Gtk.ApplicationWindow {
         });
     }
 
+    // Exact match only: the app name against an installed app's desktop id (or its last segment) or name.
+    DesktopAppInfo? find_app (string name) {
+        var wanted = name.down ();
+        foreach (var app in apps) {
+            var id = app.get_id ().down ();
+            id = id.has_suffix (".desktop") ? id.substring (0, id.length - 8) : id;
+            if (wanted in new string[] { id, id.substring (id.last_index_of (".") + 1), app.get_name ().down () }) {
+                return app as DesktopAppInfo;
+            }
+        }
+        return null;
+    }
+
     void remove_group (string key) {
         try {
             store.remove_group (key);
@@ -231,6 +297,7 @@ class Window : Gtk.ApplicationWindow {
     }
 
     void reload_rows () {
+        apps = AppInfo.get_all ();
         list.remove_all ();
         foreach (var key in store.get_groups ()) {
             add_row (key);  // file order is oldest first, and each row is prepended
