@@ -292,6 +292,8 @@ class Window : Gtk.ApplicationWindow {
         var entry = field (key, "desktop_entry");
         var info = entry != "" ? new DesktopAppInfo (entry + ".desktop") : null;
         info = info ?? find_app (field (key, "app"));
+        // gala keeps the screenshot path private, so its "Show in Files" button cannot be replayed; open the folder instead.
+        var folder = field (key, "app") == "gala-feedback" ? screenshots_folder () : null;
         int64 time = 0;
         try {
             time = store.get_int64 (key, "time");
@@ -309,7 +311,7 @@ class Window : Gtk.ApplicationWindow {
         var summary = new Gtk.Label (field (key, "summary")) { xalign = 0, wrap = true, attributes = bold };
         // Plain text, so any markup in the body shows as typed and nothing is interpreted.
         var body = new Gtk.Label (field (key, "body")) { xalign = 0, wrap = true };
-        var open = new Gtk.Button.with_label ("Open") { sensitive = info != null };
+        var open = new Gtk.Button.with_label (folder != null ? "Show in Files" : "Open") { sensitive = info != null || folder != null };
         var done = new Gtk.Button.with_label ("Done");
         var buttons = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 6) { halign = Gtk.Align.END };
         buttons.append (open);
@@ -338,14 +340,18 @@ class Window : Gtk.ApplicationWindow {
         var collapse = new Gtk.Revealer () {
             child = fade, reveal_child = true, transition_type = Gtk.RevealerTransitionType.SLIDE_UP, transition_duration = 200
         };
-        var row = new Gtk.ListBoxRow () { child = collapse, activatable = info != null };
+        var row = new Gtk.ListBoxRow () { child = collapse, activatable = info != null || folder != null };
         row.set_data ("stamp", stamp);
         row.set_data ("open", open);
         list.prepend (row);
 
         open.clicked.connect (() => {
             try {
-                info.launch (null, null);
+                if (folder != null) {
+                    AppInfo.launch_default_for_uri (folder.get_uri (), null);
+                } else {
+                    info.launch (null, null);
+                }
             } catch (Error e) {
                 warning ("Cannot open %s: %s", entry, e.message);
             }
@@ -364,6 +370,13 @@ class Window : Gtk.ApplicationWindow {
     }
 
     // Exact match only: the app name against an installed app's desktop id (or its last segment) or name.
+    // Same folder gala saves to: its translated "Screenshots" inside Pictures, or Pictures itself.
+    File screenshots_folder () {
+        var pictures = File.new_for_path (Environment.get_user_special_dir (UserDirectory.PICTURES) ?? Environment.get_home_dir ());
+        var screenshots = pictures.get_child (dgettext ("gala", "Screenshots"));
+        return screenshots.query_exists () ? screenshots : pictures;
+    }
+
     DesktopAppInfo? find_app (string name) {
         var wanted = name.down ();
         foreach (var app in apps) {
