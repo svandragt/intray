@@ -1,5 +1,6 @@
 const string SCHEMA = "io.elementary.notifications";
 const string NOTIFY_SIGNATURE = "(susssasa{sv}i)";
+const string APP_ID = "com.github.svandragt.Intray";
 
 class Window : Adw.ApplicationWindow {
     KeyFile store = new KeyFile ();
@@ -8,11 +9,40 @@ class Window : Adw.ApplicationWindow {
     Gtk.Stack stack = new Gtk.Stack ();
     Gtk.Button clear = new Gtk.Button.with_label ("Clear all");
     DBusConnection monitor;
+    KeyFile settings = new KeyFile ();
+    string settings_path = Path.build_filename (Environment.get_user_config_dir (), "intray", "settings.ini");
+    bool show_count = true;
 
     public Window (Adw.Application app) {
         Object (application: app, default_width: 480, default_height: 640);
 
+        try {
+            settings.load_from_file (settings_path, KeyFileFlags.NONE);
+            show_count = settings.get_boolean ("dock", "show-count");
+        } catch (Error e) {
+            if (!(e is FileError.NOENT || e is KeyFileError.GROUP_NOT_FOUND || e is KeyFileError.KEY_NOT_FOUND)) {
+                warning ("Cannot load %s: %s", settings_path, e.message);
+            }
+        }
+        var dock = new SimpleAction.stateful ("show-count", null, new Variant.boolean (show_count));
+        dock.change_state.connect ((action, state) => {
+            show_count = state.get_boolean ();
+            action.set_state (state);
+            settings.set_boolean ("dock", "show-count", show_count);
+            try {
+                DirUtils.create_with_parents (Path.get_dirname (settings_path), 0700);
+                settings.save_to_file (settings_path);
+            } catch (Error e) {
+                warning ("Cannot save %s: %s", settings_path, e.message);
+            }
+            refresh ();
+        });
+        add_action (dock);
+
         var header = new Adw.HeaderBar ();
+        var menu = new Menu ();
+        menu.append ("Show Count in Dock", "win.show-count");
+        header.pack_end (new Gtk.MenuButton () { icon_name = "open-menu-symbolic", menu_model = menu });
         header.pack_start (clear);
         clear.clicked.connect (() => {
             foreach (var key in store.get_groups ()) {
@@ -180,11 +210,22 @@ class Window : Adw.ApplicationWindow {
         title = count > 0 ? "Intray (%d)".printf (count) : "Intray";
         stack.visible_child_name = count > 0 ? "list" : "empty";
         clear.sensitive = count > 0;
+
+        // The dock (Pantheon, Unity, Plank) reads this signal to draw a count badge on the launcher.
+        var props = new VariantBuilder (new VariantType ("a{sv}"));
+        props.add ("{sv}", "count", new Variant.int64 (count));
+        props.add ("{sv}", "count-visible", new Variant.boolean (show_count && count > 0));
+        try {
+            application.get_dbus_connection ()?.emit_signal (null, "/com/canonical/unity/launcherentry/intray",
+                "com.canonical.Unity.LauncherEntry", "Update", new Variant ("(sa{sv})", "application://%s.desktop".printf (APP_ID), props));
+        } catch (Error e) {
+            warning ("Cannot update the dock badge: %s", e.message);
+        }
     }
 }
 
 int main (string[] args) {
-    var app = new Adw.Application ("com.github.svandragt.Intray", ApplicationFlags.DEFAULT_FLAGS);
+    var app = new Adw.Application (APP_ID, ApplicationFlags.DEFAULT_FLAGS);
     app.activate.connect (() => (app.active_window ?? new Window (app)).present ());
     return app.run (args);
 }

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Intray
+Comment=Keep a list of desktop notifications to triage later
+Exec=@bindir@/intray
+Icon=com.github.svandragt.Intray
+Terminal=false
+Categories=Utility;

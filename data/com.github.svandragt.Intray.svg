@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="front" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffbf5e"/>
+      <stop offset="1" stop-color="#e8590c"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd48a"/>
+      <stop offset="1" stop-color="#f59f3a"/>
+    </linearGradient>
+    <linearGradient id="inside" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#b24a10"/>
+      <stop offset="1" stop-color="#6e2a07"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fffefa"/>
+      <stop offset="1" stop-color="#f3e6cc"/>
+    </linearGradient>
+    <linearGradient id="bell" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff7a59"/>
+      <stop offset="1" stop-color="#d62839"/>
+    </linearGradient>
+    <filter id="blur" x="-20%" y="-50%" width="140%" height="200%">
+      <feGaussianBlur stdDeviation="3"/>
+    </filter>
+  </defs>
+  <ellipse cx="64" cy="112" rx="50" ry="7" fill="#000" opacity=".35" filter="url(#blur)"/>
+  <path d="M27 54h74q4 0 5 4l10 24H12l10-24q1-4 5-4z" fill="url(#rim)" stroke="#000" stroke-opacity=".2"/>
+  <path d="M31 58h66l8 22H23z" fill="url(#inside)"/>
+  <g transform="rotate(-7 52 70)">
+    <rect x="28" y="14" width="58" height="66" rx="3" fill="url(#paper)" stroke="#c9b48c" stroke-width=".6"/>
+    <path d="M35 24h30M35 31h38M35 38h22" stroke="#cdbb98" stroke-width="3" stroke-linecap="round"/>
+  </g>
+  <g transform="rotate(5 76 70)">
+    <rect x="45" y="22" width="58" height="62" rx="3" fill="#000" opacity=".12" transform="translate(0 2)"/>
+    <rect x="45" y="22" width="58" height="62" rx="3" fill="url(#paper)" stroke="#c9b48c" stroke-width=".6"/>
+    <path d="M74 31c-7 0-11 5-11 12v6l-3 5h28l-3-5v-6c0-7-4-12-11-12z" fill="url(#bell)" stroke="#d62839" stroke-width="2" stroke-linejoin="round"/>
+    <circle cx="74" cy="58" r="3.5" fill="#d62839"/>
+    <circle cx="87" cy="33" r="6" fill="#ff3b30" stroke="#fffefa" stroke-width="2"/>
+    <path d="M54 70h40M54 76h26" stroke="#cdbb98" stroke-width="3" stroke-linecap="round"/>
+  </g>
+  <path d="M12 82h104v18q0 8-8 8H20q-8 0-8-8z" fill="url(#front)" stroke="#000" stroke-opacity=".25"/>
+  <path d="M13 83h102" stroke="#fff" stroke-opacity=".5" stroke-width="2"/>
+  <rect x="46" y="91" width="36" height="9" rx="4.5" fill="#a63f08" opacity=".85"/>
+  <path d="M50 101h28" stroke="#fff" stroke-opacity=".3" stroke-width="1" stroke-linecap="round"/>
+</svg>
