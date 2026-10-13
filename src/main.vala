@@ -3,7 +3,7 @@ const string NOTIFY_SIGNATURE = "(susssasa{sv}i)";
 
 class Window : Adw.ApplicationWindow {
     KeyFile store = new KeyFile ();
-    string path = Path.build_filename (Environment.get_user_data_dir (), "notification-inbox", "inbox.ini");
+    string path = Path.build_filename (Environment.get_user_data_dir (), "intray", "inbox.ini");
     Gtk.ListBox list = new Gtk.ListBox () { selection_mode = Gtk.SelectionMode.NONE, show_separators = true };
     Gtk.Stack stack = new Gtk.Stack ();
     Gtk.Button clear = new Gtk.Button.with_label ("Clear all");
@@ -173,14 +173,14 @@ class Window : Adw.ApplicationWindow {
 
     void refresh () {
         var count = store.get_groups ().length;
-        title = count > 0 ? "Notification Inbox (%d)".printf (count) : "Notification Inbox";
+        title = count > 0 ? "Intray (%d)".printf (count) : "Intray";
         stack.visible_child_name = count > 0 ? "list" : "empty";
         clear.sensitive = count > 0;
     }
 }
 
 int main (string[] args) {
-    var app = new Adw.Application ("com.github.svandragt.NotificationInbox", ApplicationFlags.DEFAULT_FLAGS);
+    var app = new Adw.Application ("com.github.svandragt.Intray", ApplicationFlags.DEFAULT_FLAGS);
     app.activate.connect (() => (app.active_window ?? new Window (app)).present ());
     return app.run (args);
 }
