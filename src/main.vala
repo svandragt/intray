@@ -170,7 +170,10 @@ class Window : Adw.ApplicationWindow {
         box.append (summary);
         box.append (body);
         box.append (buttons);
-        var row = new Gtk.ListBoxRow () { child = box, activatable = false };
+        var revealer = new Gtk.Revealer () {
+            child = box, reveal_child = true, transition_type = Gtk.RevealerTransitionType.SLIDE_UP, transition_duration = 200
+        };
+        var row = new Gtk.ListBoxRow () { child = revealer, activatable = false };
         list.prepend (row);
 
         open.clicked.connect (() => {
@@ -183,8 +186,15 @@ class Window : Adw.ApplicationWindow {
         done.clicked.connect (() => {
             remove_group (key);
             save ();
-            list.remove (row);
-            refresh ();
+            // Fade the entry out, then collapse its space so the rows below slide up.
+            row.sensitive = false;
+            var fade = new Adw.TimedAnimation (box, 1, 0, 180, new Adw.PropertyAnimationTarget (box, "opacity"));
+            fade.done.connect (() => revealer.reveal_child = false);
+            revealer.notify["child-revealed"].connect (() => {
+                list.remove (row);
+                refresh ();
+            });
+            fade.play ();
         });
     }
 
