@@ -26,10 +26,14 @@ class Window : Adw.ApplicationWindow {
         var schema = SettingsSchemaSource.get_default ()?.lookup (SCHEMA, true);
         if (schema != null && schema.has_key ("do-not-disturb")) {
             var toggle = new Gtk.Switch () { valign = Gtk.Align.CENTER };
-            toggle.update_property (Gtk.AccessibleProperty.LABEL, "Do Not Disturb", -1);
             new Settings (SCHEMA).bind ("do-not-disturb", toggle, "active", SettingsBindFlags.DEFAULT);
             var box = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 6);
-            box.append (new Gtk.Label ("Do Not Disturb"));
+            // The mnemonic gives Alt+D and labels the switch for screen readers; GTK 4 labels ignore clicks.
+            var label = new Gtk.Label.with_mnemonic ("_Do Not Disturb") { mnemonic_widget = toggle };
+            var click = new Gtk.GestureClick ();
+            click.released.connect (() => toggle.active = !toggle.active);
+            label.add_controller (click);
+            box.append (label);
             box.append (toggle);
             header.pack_end (box);
         }
