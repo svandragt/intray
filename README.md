@@ -20,7 +20,7 @@ Intray remembers the choice.
 
 ## Build and run
 
-Install `valac`, `meson`, GTK 4 and libadwaita development files, then run:
+Install `valac`, `meson`, GTK 4 and Granite 7 development files, then run:
 
 ```sh
 meson setup build

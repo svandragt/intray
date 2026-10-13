@@ -2,7 +2,7 @@ const string SCHEMA = "io.elementary.notifications";
 const string NOTIFY_SIGNATURE = "(susssasa{sv}i)";
 const string APP_ID = "com.github.svandragt.Intray";
 
-class Window : Adw.ApplicationWindow {
+class Window : Gtk.ApplicationWindow {
     KeyFile store = new KeyFile ();
     string path = Path.build_filename (Environment.get_user_data_dir (), "intray", "inbox.ini");
     Gtk.ListBox list = new Gtk.ListBox () { selection_mode = Gtk.SelectionMode.NONE, show_separators = true };
@@ -13,7 +13,7 @@ class Window : Adw.ApplicationWindow {
     string settings_path = Path.build_filename (Environment.get_user_config_dir (), "intray", "settings.ini");
     bool show_count = true;
 
-    public Window (Adw.Application app) {
+    public Window (Gtk.Application app) {
         Object (application: app, default_width: 480, default_height: 640);
 
         try {
@@ -39,7 +39,10 @@ class Window : Adw.ApplicationWindow {
         });
         add_action (dock);
 
-        var header = new Adw.HeaderBar ();
+        // Granite deprecated its rich-list constant in 7.7 in favour of Granite.ListItem, which cannot hold buttons.
+        list.add_css_class ("rich-list");
+        var header = new Gtk.HeaderBar ();
+        header.add_css_class (Granite.STYLE_CLASS_FLAT);
         var menu = new Menu ();
         menu.append ("Show Count in Dock", "win.show-count");
         header.pack_end (new Gtk.MenuButton () { icon_name = "open-menu-symbolic", menu_model = menu });
@@ -69,10 +72,9 @@ class Window : Adw.ApplicationWindow {
         }
 
         stack.add_named (new Gtk.ScrolledWindow () { child = list }, "list");
-        stack.add_named (new Adw.StatusPage () { title = "Inbox zero", icon_name = "emblem-ok-symbolic" }, "empty");
-        var view = new Adw.ToolbarView () { content = stack };
-        view.add_top_bar (header);
-        content = view;
+        stack.add_named (new Granite.Placeholder ("Inbox zero") { icon = new ThemedIcon ("emblem-ok-symbolic") }, "empty");
+        titlebar = header;
+        child = stack;
 
         try {
             store.load_from_file (path, KeyFileFlags.NONE);
@@ -151,10 +153,12 @@ class Window : Adw.ApplicationWindow {
         }
 
         var source = new Gtk.Label ("%s · %s".printf (field (key, "app"), new DateTime.from_unix_local (time).format ("%d %b %H:%M"))) { xalign = 0 };
-        source.add_css_class ("dim-label");
-        source.add_css_class ("caption");
-        var summary = new Gtk.Label (field (key, "summary")) { xalign = 0, wrap = true };
-        summary.add_css_class ("heading");
+        source.add_css_class (Granite.CssClass.DIM);
+        source.add_css_class (Granite.CssClass.SMALL);
+        // Granite's h3 and h4 classes are not bold, and in a list h4 adds a margin, so set the weight directly.
+        var bold = new Pango.AttrList ();
+        bold.insert (Pango.attr_weight_new (Pango.Weight.BOLD));
+        var summary = new Gtk.Label (field (key, "summary")) { xalign = 0, wrap = true, attributes = bold };
         // Plain text, so any markup in the body shows as typed and nothing is interpreted.
         var body = new Gtk.Label (field (key, "body")) { xalign = 0, wrap = true };
         var open = new Gtk.Button.with_label ("Open") { sensitive = info != null };
@@ -163,17 +167,30 @@ class Window : Adw.ApplicationWindow {
         buttons.append (open);
         buttons.append (done);
 
-        var box = new Gtk.Box (Gtk.Orientation.VERTICAL, 4) {
-            margin_top = 8, margin_bottom = 8, margin_start = 12, margin_end = 12
+        // The themed icon tries the sender's icon, then the app's desktop icon, then a generic one.
+        var icon_name = field (key, "icon");
+        var desktop_icon = info?.get_string ("Icon");
+        Icon icon = icon_name.has_prefix ("/")
+            ? (Icon) new FileIcon (File.new_for_path (icon_name))
+            : new ThemedIcon.from_names ({ icon_name, desktop_icon ?? "", "dialog-information" });
+        var image = new Gtk.Image.from_gicon (icon) { pixel_size = 32, valign = Gtk.Align.START };
+
+        var text = new Gtk.Box (Gtk.Orientation.VERTICAL, 3) { hexpand = true };
+        text.append (source);
+        text.append (summary);
+        text.append (body);
+        text.append (buttons);
+        var box = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 12);
+        box.append (image);
+        box.append (text);
+        // Two revealers: the inner one fades the content, the outer one then collapses the space.
+        var fade = new Gtk.Revealer () {
+            child = box, reveal_child = true, transition_type = Gtk.RevealerTransitionType.CROSSFADE, transition_duration = 180
         };
-        box.append (source);
-        box.append (summary);
-        box.append (body);
-        box.append (buttons);
-        var revealer = new Gtk.Revealer () {
-            child = box, reveal_child = true, transition_type = Gtk.RevealerTransitionType.SLIDE_UP, transition_duration = 200
+        var collapse = new Gtk.Revealer () {
+            child = fade, reveal_child = true, transition_type = Gtk.RevealerTransitionType.SLIDE_UP, transition_duration = 200
         };
-        var row = new Gtk.ListBoxRow () { child = revealer, activatable = false };
+        var row = new Gtk.ListBoxRow () { child = collapse, activatable = false };
         list.prepend (row);
 
         open.clicked.connect (() => {
@@ -186,15 +203,13 @@ class Window : Adw.ApplicationWindow {
         done.clicked.connect (() => {
             remove_group (key);
             save ();
-            // Fade the entry out, then collapse its space so the rows below slide up.
             row.sensitive = false;
-            var fade = new Adw.TimedAnimation (box, 1, 0, 180, new Adw.PropertyAnimationTarget (box, "opacity"));
-            fade.done.connect (() => revealer.reveal_child = false);
-            revealer.notify["child-revealed"].connect (() => {
+            fade.notify["child-revealed"].connect (() => collapse.reveal_child = false);
+            collapse.notify["child-revealed"].connect (() => {
                 list.remove (row);
                 refresh ();
             });
-            fade.play ();
+            fade.reveal_child = false;
         });
     }
 
@@ -234,8 +249,18 @@ class Window : Adw.ApplicationWindow {
     }
 }
 
+void follow_color_scheme () {
+    var dark = Granite.Settings.get_default ().prefers_color_scheme == Granite.Settings.ColorScheme.DARK;
+    Gtk.Settings.get_default ().gtk_application_prefer_dark_theme = dark;
+}
+
 int main (string[] args) {
-    var app = new Adw.Application (APP_ID, ApplicationFlags.DEFAULT_FLAGS);
+    var app = new Gtk.Application (APP_ID, ApplicationFlags.DEFAULT_FLAGS);
+    app.startup.connect (() => {
+        Granite.init ();
+        follow_color_scheme ();
+        Granite.Settings.get_default ().notify["prefers-color-scheme"].connect (follow_color_scheme);
+    });
     app.activate.connect (() => (app.active_window ?? new Window (app)).present ());
     return app.run (args);
 }
