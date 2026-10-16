@@ -59,14 +59,21 @@ All code is in `src/main.vala`. `main()` creates the `Gtk.Application`, and the
 ### Rows and opening
 
 - `add_row()` builds one row and attaches `stamp`, `info` and `uri` to it with
-  `set_data`. `open_row()` and the 60-second timer read them back.
+  `set_data`, along with `app` and `key` for sorting. `open_row()` and the
+  60-second timer read them back.
 - The app to launch comes from the `desktop-entry` hint. Without the hint,
   `find_app()` matches the app name exactly, ignoring case, against an installed
   app's desktop id, the last segment of the id, or the app name.
 - A URI takes precedence over the app: `gala-feedback` (screenshots) opens the
   Screenshots folder, and an `x-url` hint opens only when its scheme is http or
   https.
-- **Done** plays two nested revealers: the inner one fades the content, the outer
+- A sort function groups rows by app, ordered by each app's newest entry in the
+  `latest` table, which `refresh()` rebuilds. The header function adds a header
+  with **Dismiss all** above the first row of each group. Headers are children of
+  the list too, so code that walks the list's children must skip them.
+- **Dismiss all** copies the app's entries into the same `cleared` buffer that
+  **Clear all** uses, so **Undo** restores them.
+- **Dismiss** plays two nested revealers: the inner one fades the content, the outer
   one collapses the row. The CSS in the `Window` constructor moves the theme's row
   padding inside the revealers, so the collapse does not snap at the end.
 

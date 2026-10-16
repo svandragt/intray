@@ -2,21 +2,19 @@ const string SCHEMA = "io.elementary.notifications";
 const string NOTIFY_SIGNATURE = "(susssasa{sv}i)";
 const string APP_ID = "com.github.svandragt.Intray";
 
-// The source line of an entry. The window refreshes its relative time.
+// The time line of an entry; the group header names the app. The window refreshes its relative time.
 class Stamp : Object {
     public Gtk.Label label = new Gtk.Label (null) { xalign = 0 };
-    string app;
     DateTime time;
 
-    public Stamp (string app, DateTime time) {
-        this.app = app;
+    public Stamp (DateTime time) {
         this.time = time;
         label.tooltip_text = time.format ("%d %b %Y %H:%M");
         update ();
     }
 
     public void update () {
-        label.label = "%s · %s".printf (app, Granite.DateTime.get_relative_datetime (time));
+        label.label = Granite.DateTime.get_relative_datetime (time);
     }
 }
 
@@ -26,7 +24,9 @@ class Window : Gtk.ApplicationWindow {
     Gtk.ListBox list = new Gtk.ListBox () { selection_mode = Gtk.SelectionMode.NONE, show_separators = true };
     Gtk.Stack stack = new Gtk.Stack ();
     Gtk.Button clear = new Gtk.Button.with_label ("Clear all");
-    string cleared = "";  // inbox data removed by Clear all, kept for Undo until the toast is dismissed
+    string cleared = "";  // inbox data removed by Clear all or Dismiss all, kept for Undo until the toast is dismissed
+    Granite.Toast toast = new Granite.Toast ("") { valign = Gtk.Align.END };  // the top would cover the newest entry
+    HashTable<string, string> latest = new HashTable<string, string> (str_hash, str_equal);  // app -> newest entry key
     DBusConnection monitor;
     KeyFile settings = new KeyFile ();
     string settings_path = Path.build_filename (Environment.get_user_config_dir (), "intray", "settings.ini");
@@ -79,6 +79,7 @@ class Window : Gtk.ApplicationWindow {
             list.separators > row:last-child { border-bottom: 1px solid @menu_separator; }
             list.rich-list > row { padding: 0; min-height: 0; }
             list.rich-list > row > revealer > revealer > box { padding: 0.5rem; }
+            list > box.group-header { border-top: 1px solid @menu_separator; padding: 6px 6px 6px 12px; }
         """);
         Gtk.StyleContext.add_provider_for_display (Gdk.Display.get_default (), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
         var header = new Gtk.HeaderBar ();
@@ -88,13 +89,13 @@ class Window : Gtk.ApplicationWindow {
         menu.append ("Quit", "app.quit");
         header.pack_end (new Gtk.MenuButton () { icon_name = "open-menu-symbolic", menu_model = menu });
         header.pack_start (clear);
-        var toast = new Granite.Toast ("Inbox cleared") { valign = Gtk.Align.END };  // the top would cover the newest entry
         toast.set_default_action ("Undo");
         clear.clicked.connect (() => {
             cleared += store.to_data ();
             store = new KeyFile ();
             save_to (store, path);
             reload_rows ();
+            toast.title = "Inbox cleared";
             toast.send_notification ();
         });
         // Prepending the cleared groups keeps the file oldest first and keeps notifications that arrived since.
@@ -144,9 +145,37 @@ class Window : Gtk.ApplicationWindow {
         reload_rows ();
         start_monitor ();
         list.row_activated.connect (open_row);
+        // Groups sort by their newest entry, and entries within a group newest first.
+        list.set_sort_func ((a, b) => {
+            var app_a = a.get_data<string> ("app");
+            var app_b = b.get_data<string> ("app");
+            var newest_a = app_a == app_b ? a.get_data<string> ("key") : latest[app_a];
+            var newest_b = app_a == app_b ? b.get_data<string> ("key") : latest[app_b];
+            // A row that Dismiss is still animating has no newest entry left.
+            var diff = int64.parse (newest_b ?? "0") - int64.parse (newest_a ?? "0");
+            return diff > 0 ? 1 : diff < 0 ? -1 : 0;
+        });
+        list.set_header_func ((row, before) => {
+            var sender = row.get_data<string> ("app");
+            if (before != null && before.get_data<string> ("app") == sender) {
+                row.set_header (null);
+                return;
+            }
+            var bold = new Pango.AttrList ();
+            bold.insert (Pango.attr_weight_new (Pango.Weight.BOLD));
+            var name = new Gtk.Label (sender) { xalign = 0, hexpand = true, attributes = bold };
+            var dismiss = new Gtk.Button.with_label ("Dismiss all");
+            dismiss.clicked.connect (() => dismiss_app (sender));
+            var box = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 6);
+            box.add_css_class ("group-header");
+            box.append (name);
+            box.append (dismiss);
+            row.set_header (box);
+        });
         Timeout.add_seconds (60, () => {
+            // Group headers are children of the list too, and carry no stamp.
             for (var row = list.get_first_child (); row != null; row = row.get_next_sibling ()) {
-                row.get_data<Stamp> ("stamp").update ();
+                row.get_data<Stamp> ("stamp")?.update ();
             }
             return Source.CONTINUE;
         });
@@ -273,7 +302,7 @@ class Window : Gtk.ApplicationWindow {
         var key = pending[call];
         if (key != null) {
             pending.remove (call);
-            if (store.has_group (key)) {  // Done or a newer replacement may have removed it already
+            if (store.has_group (key)) {  // Dismiss or a newer replacement may have removed it already
                 store.set_int64 (key, "server_id", id);
                 save_to (store, path);
             }
@@ -317,7 +346,7 @@ class Window : Gtk.ApplicationWindow {
             warning ("Bad time in %s: %s", key, e.message);
         }
 
-        var stamp = new Stamp (field (key, "app"), new DateTime.from_unix_local (time));
+        var stamp = new Stamp (new DateTime.from_unix_local (time));
         var source = stamp.label;
         source.add_css_class (Granite.CssClass.DIM);
         source.add_css_class (Granite.CssClass.SMALL);
@@ -327,7 +356,7 @@ class Window : Gtk.ApplicationWindow {
         var summary = new Gtk.Label (field (key, "summary")) { xalign = 0, wrap = true, attributes = bold };
         // Plain text, so any markup in the body shows as typed and nothing is interpreted.
         var body = new Gtk.Label (field (key, "body")) { xalign = 0, wrap = true };
-        var done = new Gtk.Button.with_label ("Done");
+        var done = new Gtk.Button.with_label ("Dismiss");
         var buttons = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 6) { halign = Gtk.Align.END };
         buttons.append (done);
 
@@ -356,6 +385,8 @@ class Window : Gtk.ApplicationWindow {
         };
         var row = new Gtk.ListBoxRow () { child = collapse, activatable = info != null || uri != null };
         row.set_data ("stamp", stamp);
+        row.set_data ("app", field (key, "app"));
+        row.set_data ("key", key);
         row.set_data ("info", info);
         row.set_data ("uri", uri);
         list.prepend (row);
@@ -371,6 +402,28 @@ class Window : Gtk.ApplicationWindow {
             });
             fade.reveal_child = false;
         });
+    }
+
+    // Removed entries go to the same Undo buffer as Clear all.
+    void dismiss_app (string app) {
+        var removed = new KeyFile ();
+        foreach (var key in store.get_groups ()) {
+            if (field (key, "app") == app) {
+                try {
+                    foreach (var name in store.get_keys (key)) {
+                        removed.set_value (key, name, store.get_value (key, name));
+                    }
+                } catch (Error e) {
+                    warning ("Cannot copy %s for Undo: %s", key, e.message);
+                }
+                remove_group (key);
+            }
+        }
+        cleared += removed.to_data ();
+        save_to (store, path);
+        reload_rows ();
+        toast.title = "Dismissed %s".printf (app);
+        toast.send_notification ();
     }
 
     void open_row (Gtk.ListBoxRow row) {
@@ -425,7 +478,15 @@ class Window : Gtk.ApplicationWindow {
     }
 
     void refresh () {
-        var count = store.get_groups ().length;
+        var groups = store.get_groups ();
+        var count = groups.length;
+        latest.remove_all ();
+        foreach (var key in groups) {
+            latest[field (key, "app")] = key;  // file order is oldest first, so the last key wins
+        }
+        // A new entry can move its whole group to the top.
+        list.invalidate_sort ();
+        list.invalidate_headers ();
         stack.visible_child_name = count > 0 ? "list" : "empty";
         clear.sensitive = count > 0;
 

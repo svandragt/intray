@@ -3,9 +3,11 @@
 Intray keeps a list of every desktop notification, so you can turn
 on Do Not Disturb and triage the notifications later. It targets elementary OS.
 
-Each entry shows the app, how long ago it arrived, the summary and the body.
-Hover over the time to see the date. Select an entry to launch the app that sent
-it, or select **Done** to remove the entry. A screenshot entry opens the
+Intray groups entries by the app that sent them, with the most recent group at the
+top. Each entry shows how long ago it arrived, the summary and the body. Hover
+over the time to see the date. Select an entry to launch the app that sent it, or
+select **Dismiss** to remove the entry. **Dismiss all** in a group header removes
+every entry from that app and shows an **Undo** button for a few seconds. A screenshot entry opens the
 Screenshots folder instead, and an entry whose app sent a web link in an `x-url`
 hint opens the link. **Clear all** empties the inbox and shows an **Undo** button for a few seconds. The
 **Do Not Disturb** switch in the header bar turns the elementary OS setting on
