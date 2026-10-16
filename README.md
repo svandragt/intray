@@ -42,14 +42,14 @@ Intray remembers the choice.
 Install `valac`, `meson`, GTK 4 and Granite 7 development files, then run:
 
 ```sh
-meson setup build
-meson compile -C build
-./build/intray
+make run
 ```
 
-To add Intray to your app launcher and dock, install it with its icon and desktop
-file. For a per-user install, run `meson setup build --prefix ~/.local` first:
+To add Intray to your app launcher and dock, install it in `~/.local` with its icon
+and desktop file:
 
 ```sh
-meson install -C build
+make install
 ```
+
+If Intray is already running, quit it and start it again to use the new version.

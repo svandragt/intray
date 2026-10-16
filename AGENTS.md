@@ -10,11 +10,13 @@ any behaviour change.
 ## Commands
 
 ```sh
-meson setup build                 # once; add --prefix ~/.local for a per-user install
-meson compile -C build
-./build/intray                    # or ./build/intray --background to start hidden
-meson install -C build            # installs the binary, desktop file and icon
+make                              # sets up build/ with prefix ~/.local on first run, then compiles
+make run                          # compiles and runs ./build/intray; add --background to start hidden
+make install                      # installs the binary, desktop file and icon
 ```
+
+The Makefile wraps Meson; `meson compile -C build` and `meson install -C build`
+work directly too.
 
 The project has no tests and no linter. Check a change by compiling it and running
 the app. To produce a notification to capture, run `notify-send "summary" "body"`.
