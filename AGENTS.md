@@ -11,7 +11,7 @@ any behaviour change.
 
 ```sh
 make                              # sets up build/ with prefix ~/.local on first run, then compiles
-make run                          # compiles and runs ./build/intray; add --background to start hidden
+make run                          # compiles and runs ./build/intray (./build/intray --background starts it hidden)
 make install                      # installs the binary, desktop file and icon
 ```
 
