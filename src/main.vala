@@ -71,6 +71,16 @@ class Window : Gtk.ApplicationWindow {
 
         // Granite deprecated its rich-list constant in 7.7 in favour of Granite.ListItem, which cannot hold buttons.
         list.add_css_class ("rich-list");
+        // The theme draws separators only between rows, so a lone entry has no line under it.
+        // Its row padding and min-height sit outside the collapse revealer and would make a dismissed row snap shut,
+        // so the padding moves onto the row content instead.
+        var css = new Gtk.CssProvider ();
+        css.load_from_string ("""
+            list.separators > row:last-child { border-bottom: 1px solid @menu_separator; }
+            list.rich-list > row { padding: 0; min-height: 0; }
+            list.rich-list > row > revealer > revealer > box { padding: 0.5rem; }
+        """);
+        Gtk.StyleContext.add_provider_for_display (Gdk.Display.get_default (), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
         var header = new Gtk.HeaderBar ();
         header.add_css_class (Granite.STYLE_CLASS_FLAT);
         var menu = new Menu ();
@@ -133,7 +143,7 @@ class Window : Gtk.ApplicationWindow {
         }
         reload_rows ();
         start_monitor ();
-        list.row_activated.connect ((row) => row.get_data<Gtk.Button> ("open").clicked ());
+        list.row_activated.connect (open_row);
         Timeout.add_seconds (60, () => {
             for (var row = list.get_first_child (); row != null; row = row.get_next_sibling ()) {
                 row.get_data<Stamp> ("stamp").update ();
@@ -218,13 +228,15 @@ class Window : Gtk.ApplicationWindow {
 
     void add (Variant notify, string call) {
         var hints = notify.get_child_value (6);
-        if (is_transient (hints)) {
+        // Volume and brightness on-screen displays carry this hint and replace each other in place.
+        if (is_transient (hints) || hints.lookup_value ("x-canonical-private-synchronous", null) != null) {
             return;
         }
         var key = get_real_time ().to_string ();  // monotonic time restarts at boot and would reuse saved keys
         var app = notify.get_child_value (0).get_string ();
         var replaces = notify.get_child_value (1).get_uint32 ();
         var hint = hints.lookup_value ("desktop-entry", VariantType.STRING);
+        var url = hints.lookup_value ("x-url", VariantType.STRING);
         // Server ids restart when the server does, so the newest entry of the same app wins.
         string? old = null;
         foreach (var group in store.get_groups ()) {
@@ -237,6 +249,7 @@ class Window : Gtk.ApplicationWindow {
         store.set_string (key, "summary", notify.get_child_value (3).get_string ());
         store.set_string (key, "body", notify.get_child_value (4).get_string ());
         store.set_string (key, "desktop_entry", hint != null ? hint.get_string () : "");
+        store.set_string (key, "url", url != null ? url.get_string () : "");
         store.set_int64 (key, "time", get_real_time () / 1000000);
         if (old != null) {
             remove_group (old);
@@ -294,6 +307,9 @@ class Window : Gtk.ApplicationWindow {
         info = info ?? find_app (field (key, "app"));
         // gala keeps the screenshot path private, so its "Show in Files" button cannot be replayed; open the folder instead.
         var folder = field (key, "app") == "gala-feedback" ? screenshots_folder () : null;
+        // Any client can send a hint, so only web links open; a file: or custom scheme could run a handler.
+        var url = field (key, "url");
+        var uri = folder?.get_uri () ?? (Uri.peek_scheme (url) in new string[] { "http", "https" } ? url : null);
         int64 time = 0;
         try {
             time = store.get_int64 (key, "time");
@@ -311,10 +327,8 @@ class Window : Gtk.ApplicationWindow {
         var summary = new Gtk.Label (field (key, "summary")) { xalign = 0, wrap = true, attributes = bold };
         // Plain text, so any markup in the body shows as typed and nothing is interpreted.
         var body = new Gtk.Label (field (key, "body")) { xalign = 0, wrap = true };
-        var open = new Gtk.Button.with_label (folder != null ? "Show in Files" : "Open") { sensitive = info != null || folder != null };
         var done = new Gtk.Button.with_label ("Done");
         var buttons = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 6) { halign = Gtk.Align.END };
-        buttons.append (open);
         buttons.append (done);
 
         // The themed icon tries the sender's icon, then the app's desktop icon, then a generic one.
@@ -340,22 +354,12 @@ class Window : Gtk.ApplicationWindow {
         var collapse = new Gtk.Revealer () {
             child = fade, reveal_child = true, transition_type = Gtk.RevealerTransitionType.SLIDE_UP, transition_duration = 200
         };
-        var row = new Gtk.ListBoxRow () { child = collapse, activatable = info != null || folder != null };
+        var row = new Gtk.ListBoxRow () { child = collapse, activatable = info != null || uri != null };
         row.set_data ("stamp", stamp);
-        row.set_data ("open", open);
+        row.set_data ("info", info);
+        row.set_data ("uri", uri);
         list.prepend (row);
 
-        open.clicked.connect (() => {
-            try {
-                if (folder != null) {
-                    AppInfo.launch_default_for_uri (folder.get_uri (), null);
-                } else {
-                    info.launch (null, null);
-                }
-            } catch (Error e) {
-                warning ("Cannot open %s: %s", entry, e.message);
-            }
-        });
         done.clicked.connect (() => {
             remove_group (key);
             save_to (store, path);
@@ -369,7 +373,20 @@ class Window : Gtk.ApplicationWindow {
         });
     }
 
-    // Exact match only: the app name against an installed app's desktop id (or its last segment) or name.
+    void open_row (Gtk.ListBoxRow row) {
+        var info = row.get_data<AppInfo> ("info");
+        var uri = row.get_data<string> ("uri");
+        try {
+            if (uri != null) {
+                AppInfo.launch_default_for_uri (uri, null);
+            } else {
+                info.launch (null, null);
+            }
+        } catch (Error e) {
+            warning ("Cannot open %s: %s", uri ?? info.get_id (), e.message);
+        }
+    }
+
     // Same folder gala saves to: its translated "Screenshots" inside Pictures, or Pictures itself.
     File screenshots_folder () {
         var pictures = File.new_for_path (Environment.get_user_special_dir (UserDirectory.PICTURES) ?? Environment.get_home_dir ());
@@ -377,6 +394,7 @@ class Window : Gtk.ApplicationWindow {
         return screenshots.query_exists () ? screenshots : pictures;
     }
 
+    // Exact match only: the app name against an installed app's desktop id (or its last segment) or name.
     DesktopAppInfo? find_app (string name) {
         var wanted = name.down ();
         foreach (var app in apps) {
